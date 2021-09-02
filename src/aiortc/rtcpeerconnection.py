@@ -16,7 +16,7 @@ from .exceptions import (
     InvalidStateError,
     OperationError,
 )
-from .mediastreams import MediaStreamTrack
+from .mediastreams import MediaStreamTrack, MediaStreamNativeTrack
 from .rtcconfiguration import RTCConfiguration
 from .rtcdatachannel import RTCDataChannel, RTCDataChannelParameters
 from .rtcdtlstransport import RTCCertificate, RTCDtlsParameters, RTCDtlsTransport
@@ -403,9 +403,9 @@ class RTCPeerConnection(AsyncIOEventEmitter):
             iceTransport = self.__sctp.transport.transport
             await iceTransport.addRemoteCandidate(candidate)
 
-    def addTrack(self, track: MediaStreamTrack) -> RTCRtpSender:
+    def addTrack(self, track: Union[MediaStreamTrack, MediaStreamNativeTrack]) -> RTCRtpSender:
         """
-        Add a :class:`MediaStreamTrack` to the set of media tracks which
+        Add a :class:`MediaStreamTrack` or :class:`MediaStreamNativeTrack` to the set of media tracks which
         will be transmitted to the remote peer.
         """
         # check state is valid

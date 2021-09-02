@@ -10,7 +10,7 @@ from . import clock, rtp
 from .codecs import get_capabilities, get_encoder, is_rtx
 from .codecs.base import Encoder
 from .exceptions import InvalidStateError
-from .mediastreams import MediaStreamError, MediaStreamTrack
+from .mediastreams import MediaStreamError, MediaStreamTrack, MediaStreamNativeTrack
 from .rtcrtpparameters import RTCRtpCodecParameters, RTCRtpSendParameters
 from .rtp import (
     RTCP_PSFB_APP,
@@ -53,11 +53,11 @@ class RTCRtpSender:
     :param transport: An :class:`RTCDtlsTransport`.
     """
 
-    def __init__(self, trackOrKind: Union[MediaStreamTrack, str], transport) -> None:
+    def __init__(self, trackOrKind: Union[MediaStreamTrack, MediaStreamNativeTrack, str], transport) -> None:
         if transport.state == "closed":
             raise InvalidStateError
 
-        if isinstance(trackOrKind, MediaStreamTrack):
+        if isinstance(trackOrKind, MediaStreamTrack) or isinstance(trackOrKind, MediaStreamNativeTrack):
             self.__kind = trackOrKind.kind
             self.replaceTrack(trackOrKind)
         else:
@@ -98,9 +98,9 @@ class RTCRtpSender:
         return self.__kind
 
     @property
-    def track(self) -> MediaStreamTrack:
+    def track(self) -> Union[MediaStreamTrack, MediaStreamNativeTrack]:
         """
-        The :class:`MediaStreamTrack` which is being handled by the sender.
+        The :class:`MediaStreamTrack` or :class:`MediaStreamNativeTrack` which is being handled by the sender.
         """
         return self.__track
 
@@ -149,7 +149,7 @@ class RTCRtpSender:
 
         return self.__stats
 
-    def replaceTrack(self, track: Optional[MediaStreamTrack]) -> None:
+    def replaceTrack(self, track: Union[Optional[MediaStreamTrack], Optional[MediaStreamNativeTrack]]) -> None:
         self.__track = track
         if track is not None:
             self._track_id = track.id
@@ -244,17 +244,20 @@ class RTCRtpSender:
                 pass
 
     async def _next_encoded_frame(self, codec: RTCRtpCodecParameters):
-        # get frame
-        frame = await self.__track.recv()
-
-        # encode frame
-        if self.__encoder is None:
-            self.__encoder = get_encoder(codec)
-        force_keyframe = self.__force_keyframe
-        self.__force_keyframe = False
-        return await self.__loop.run_in_executor(
-            None, self.__encoder.encode, frame, force_keyframe
-        )
+        if isinstance(self.__track, MediaStreamNativeTrack):
+            # get encoded packet
+            return await self.__track.recv()
+        else:
+            # get frame
+            frame = await self.__track.recv()
+            # encode frame
+            if self.__encoder is None:
+                self.__encoder = get_encoder(codec)
+            force_keyframe = self.__force_keyframe
+            self.__force_keyframe = False
+            return await self.__loop.run_in_executor(
+                None, self.__encoder.encode, frame, force_keyframe
+            )         
 
     async def _retransmit(self, sequence_number: int) -> None:
         """

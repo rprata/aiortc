@@ -3,7 +3,7 @@ import fractions
 import time
 import uuid
 from abc import ABCMeta, abstractmethod
-from typing import Tuple
+from typing import List, Tuple
 
 from av import AudioFrame, VideoFrame
 from av.frame import Frame
@@ -13,7 +13,6 @@ AUDIO_PTIME = 0.020  # 20ms audio packetization
 VIDEO_CLOCK_RATE = 90000
 VIDEO_PTIME = 1 / 30  # 30fps
 VIDEO_TIME_BASE = fractions.Fraction(1, VIDEO_CLOCK_RATE)
-
 
 def convert_timebase(
     pts: int, from_base: fractions.Fraction, to_base: fractions.Fraction
@@ -65,6 +64,43 @@ class MediaStreamTrack(AsyncIOEventEmitter, metaclass=ABCMeta):
             # to facilitate garbage collection.
             self.remove_all_listeners()
 
+class MediaStreamNativeTrack(AsyncIOEventEmitter, metaclass=ABCMeta):
+    """
+    A single media track within a stream.
+    """
+
+    kind = "unknown"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.__ended = False
+        self._id = str(uuid.uuid4())
+
+    @property
+    def id(self) -> str:
+        """
+        An automatically generated globally unique ID.
+        """
+        return self._id
+
+    @property
+    def readyState(self) -> str:
+        return "ended" if self.__ended else "live"
+
+    @abstractmethod
+    async def recv(self) -> Tuple[List[bytes], int]:
+        """
+        Receive the next :class:`~av.packet.Packet`.
+        """
+
+    def stop(self) -> None:
+        if not self.__ended:
+            self.__ended = True
+            self.emit("ended")
+
+            # no more events will be emitted, so remove all event listeners
+            # to facilitate garbage collection.
+            self.remove_all_listeners()
 
 class AudioStreamTrack(MediaStreamTrack):
     """
@@ -144,3 +180,40 @@ class VideoStreamTrack(MediaStreamTrack):
         frame.pts = pts
         frame.time_base = time_base
         return frame
+
+class VideoStreamNativeTrack(MediaStreamNativeTrack):
+    """
+    A dummy video native track which reads a buffer. Nothing appears in screen.
+    """
+
+    kind = "video"
+
+    _start: float
+    _timestamp: int
+
+    async def next_timestamp(self) -> Tuple[int, fractions.Fraction]:
+        if self.readyState != "live":
+            raise MediaStreamError
+
+        if hasattr(self, "_timestamp"):
+            self._timestamp += int(VIDEO_PTIME * VIDEO_CLOCK_RATE)
+            wait = self._start + (self._timestamp / VIDEO_CLOCK_RATE) - time.time()
+            await asyncio.sleep(wait)
+        else:
+            self._start = time.time()
+            self._timestamp = 0
+        return self._timestamp, VIDEO_TIME_BASE
+
+    async def recv(self):
+        """
+        Receive the next :class:`~av.packet.Packet`.
+
+        The base implementation just reads a buffer.
+        """
+        pts, time_base = await self.next_timestamp()
+
+        buffer = []
+        buffer.append(bytes(1300))
+
+        return buffer, int(pts * time_base)
+
