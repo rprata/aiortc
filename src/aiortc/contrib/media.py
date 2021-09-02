@@ -4,16 +4,20 @@ import fractions
 import logging
 import threading
 import time
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Union
+from struct import pack
 
 import av
 from av import AudioFrame, VideoFrame
+from av.audio.stream import AudioStream
+from av.video.stream import VideoStream
 from av.frame import Frame
 
-from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamTrack
+from aiortc.codecs.h264 import H264Encoder
+
+from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamNativeTrack, MediaStreamTrack
 
 logger = logging.getLogger(__name__)
-
 
 REAL_TIME_FORMATS = [
     "alsa",
@@ -82,7 +86,7 @@ class MediaBlackhole:
 
 
 def player_worker(
-    loop, container, streams, audio_track, video_track, quit_event, throttle_playback
+    loop, container, streams, audio_track, video_track, quit_event, throttle_playback, transcode
 ):
     audio_fifo = av.AudioFifo()
     audio_format_name = "s16"
@@ -100,64 +104,102 @@ def player_worker(
     start_time = time.time()
 
     while not quit_event.is_set():
-        try:
-            frame = next(container.decode(*streams))
-        except (av.AVError, StopIteration) as exc:
-            if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
-                time.sleep(0.01)
-                continue
-            if audio_track:
-                asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
-            if video_track:
-                asyncio.run_coroutine_threadsafe(video_track._queue.put(None), loop)
-            break
+        if transcode:
+            try:
+                frame = next(container.decode(*streams))
+            except (av.AVError, StopIteration) as exc:
+                if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
+                    time.sleep(0.01)
+                    continue
+                if audio_track:
+                    asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
+                if video_track:
+                    asyncio.run_coroutine_threadsafe(video_track._queue.put(None), loop)
+                break
 
-        # read up to 1 second ahead
-        if throttle_playback:
-            elapsed_time = time.time() - start_time
-            if frame_time and frame_time > elapsed_time + 1:
-                time.sleep(0.1)
+            # read up to 1 second ahead
+            if throttle_playback:
+                elapsed_time = time.time() - start_time
+                if frame_time and frame_time > elapsed_time + 1:
+                    time.sleep(0.1)
 
-        if isinstance(frame, AudioFrame) and audio_track:
-            if (
-                frame.format.name != audio_format_name
-                or frame.layout.name != audio_layout_name
-                or frame.sample_rate != audio_sample_rate
-            ):
-                frame.pts = None
-                frame = audio_resampler.resample(frame)
+            if isinstance(frame, AudioFrame) and audio_track:
+                if (
+                    frame.format.name != audio_format_name
+                    or frame.layout.name != audio_layout_name
+                    or frame.sample_rate != audio_sample_rate
+                ):
+                    frame.pts = None
+                    frame = audio_resampler.resample(frame)
 
-            # fix timestamps
-            frame.pts = audio_samples
-            frame.time_base = fractions.Fraction(1, audio_sample_rate)
-            audio_samples += frame.samples
+                # fix timestamps
+                frame.pts = audio_samples
+                frame.time_base = fractions.Fraction(1, audio_sample_rate)
+                audio_samples += frame.samples
 
-            audio_fifo.write(frame)
-            while True:
-                frame = audio_fifo.read(audio_samples_per_frame)
-                if frame:
-                    frame_time = frame.time
-                    asyncio.run_coroutine_threadsafe(
-                        audio_track._queue.put(frame), loop
+                audio_fifo.write(frame)
+                while True:
+                    frame = audio_fifo.read(audio_samples_per_frame)
+                    if frame:
+                        frame_time = frame.time
+                        asyncio.run_coroutine_threadsafe(
+                            audio_track._queue.put(frame), loop
+                        )
+                    else:
+                        break
+            elif isinstance(frame, VideoFrame) and video_track:
+                if frame.pts is None:  # pragma: no cover
+                    logger.warning(
+                        "MediaPlayer(%s) Skipping video frame with no pts", container.name
                     )
-                else:
-                    break
-        elif isinstance(frame, VideoFrame) and video_track:
-            if frame.pts is None:  # pragma: no cover
-                logger.warning(
-                    "MediaPlayer(%s) Skipping video frame with no pts", container.name
-                )
+                    continue
+
+                # video from a webcam doesn't start at pts 0, cancel out offset
+                if video_first_pts is None:
+                    video_first_pts = frame.pts
+                frame.pts -= video_first_pts
+
+                frame_time = frame.time
+                asyncio.run_coroutine_threadsafe(video_track._queue.put(frame), loop)
+        else:
+            try:
+                packet = next(container.demux(*streams))
+            except (av.AVError, StopIteration) as exc:
+                if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
+                    time.sleep(0.01)
+                    continue
+                if audio_track:
+                    asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
+                if video_track:
+                    asyncio.run_coroutine_threadsafe(video_track._queue.put(None), loop)
+                break
+                
+            # read up to 1 second ahead
+            if throttle_playback:
+                elapsed_time = time.time() - start_time
+                if frame_time and frame_time > elapsed_time + 1:
+                    time.sleep(0.1)
+
+            if isinstance(*streams, AudioStream):
+                frame_time = int(packet.pts * packet.time_base)
+                asyncio.run_coroutine_threadsafe(audio_track._queue.put(packet), loop)
+            elif isinstance(*streams, VideoStream):
+                if packet.pts is None:
+                    logger.warning(
+                        "MediaPlayer(%s) Skipping video frame with no pts", container.name
+                    )
+                    continue
+
+                # video from a webcam doesn't start at pts 0, cancel out offset
+                if video_first_pts is None:
+                    video_first_pts = packet.pts
+                packet.pts -= video_first_pts
+
+                frame_time = int(packet.pts * packet.time_base)
+                asyncio.run_coroutine_threadsafe(video_track._queue.put(packet), loop)
+            else:
                 continue
-
-            # video from a webcam doesn't start at pts 0, cancel out offset
-            if video_first_pts is None:
-                video_first_pts = frame.pts
-            frame.pts -= video_first_pts
-
-            frame_time = frame.time
-            asyncio.run_coroutine_threadsafe(video_track._queue.put(frame), loop)
-
-
+            
 class PlayerStreamTrack(MediaStreamTrack):
     def __init__(self, player, kind):
         super().__init__()
@@ -197,6 +239,35 @@ class PlayerStreamTrack(MediaStreamTrack):
             self._player._stop(self)
             self._player = None
 
+class PlayerStreamNativeTrack(MediaStreamNativeTrack):
+    def __init__(self, player, kind):
+        super().__init__()
+        self.kind = kind
+        self._player = player
+        self._queue = asyncio.Queue()
+        self._start = None
+        self._h264_encoder = H264Encoder()
+
+    async def recv(self):
+        if self.readyState != "live":
+            raise MediaStreamError
+
+        self._player._start(self)
+        packet = await self._queue.get()
+        if packet is None:
+            self.stop()
+            raise MediaStreamError
+
+        # It's necessary to packetize data to complete h264 packet
+        # Using H264Encoder::_split_bitstream and H264Encoder::_packetize
+        data = self._h264_encoder._split_bitstream(packet.to_bytes())
+        return self._h264_encoder._packetize(data), int(packet.dts)
+
+    def stop(self):
+        super().stop()
+        if self._player is not None:
+            self._player._stop(self)
+            self._player = None
 
 class MediaPlayer:
     """
@@ -234,22 +305,29 @@ class MediaPlayer:
     :param options: Additional options to pass to FFmpeg.
     """
 
-    def __init__(self, file, format=None, options={}):
+    def __init__(self, file, format=None, options={}, transcode=True):
         self.__container = av.open(file=file, format=format, mode="r", options=options)
         self.__thread: Optional[threading.Thread] = None
         self.__thread_quit: Optional[threading.Event] = None
 
         # examine streams
-        self.__started: Set[PlayerStreamTrack] = set()
+        self.__started: Set[Union[PlayerStreamTrack, PlayerStreamNativeTrack]] = set()
         self.__streams = []
-        self.__audio: Optional[PlayerStreamTrack] = None
-        self.__video: Optional[PlayerStreamTrack] = None
+        self.__transcode = transcode
+        self.__audio: Union[Optional[PlayerStreamTrack], Optional[PlayerStreamNativeTrack]] = None
+        self.__video: Union[Optional[PlayerStreamTrack], Optional[PlayerStreamNativeTrack]] = None
         for stream in self.__container.streams:
             if stream.type == "audio" and not self.__audio:
-                self.__audio = PlayerStreamTrack(self, kind="audio")
+                if transcode:
+                    self.__audio = PlayerStreamTrack(self, kind="audio")
+                else:
+                    self.__audio = PlayerStreamNativeTrack(self, kind="audio")
                 self.__streams.append(stream)
             elif stream.type == "video" and not self.__video:
-                self.__video = PlayerStreamTrack(self, kind="video")
+                if transcode:
+                    self.__video = PlayerStreamTrack(self, kind="video")
+                else:
+                    self.__video = PlayerStreamNativeTrack(self, kind="video")
                 self.__streams.append(stream)
 
         # check whether we need to throttle playback
@@ -286,6 +364,7 @@ class MediaPlayer:
                     self.__video,
                     self.__thread_quit,
                     self._throttle_playback,
+                    self.__transcode
                 ),
             )
             self.__thread.start()
