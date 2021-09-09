@@ -186,7 +186,7 @@ def player_worker(
             elif isinstance(*streams, VideoStream):
                 if packet.pts is None:
                     logger.warning(
-                        "MediaPlayer(%s) Skipping video frame with no pts", container.name
+                        "MediaPlayer(%s) Skipping video packet with no pts", container.name
                     )
                     continue
 
