@@ -225,12 +225,13 @@ class H264Encoder(Encoder):
         # TODO: write in a more pytonic way,
         # translate from: https://github.com/aizvorski/h264bitstream/blob/master/h264_nal.c#L134
         i = 0
+        buflen = len(buf)
         while True:
             while (buf[i] != 0 or buf[i + 1] != 0 or buf[i + 2] != 0x01) and (
                 buf[i] != 0 or buf[i + 1] != 0 or buf[i + 2] != 0 or buf[i + 3] != 0x01
             ):
                 i += 1  # skip leading zero
-                if i + 4 >= len(buf):
+                if i + 4 >= buflen:
                     return
             if buf[i] != 0 or buf[i + 1] != 0 or buf[i + 2] != 0x01:
                 i += 1
@@ -242,8 +243,8 @@ class H264Encoder(Encoder):
                 i += 1
                 # FIXME: the next line fails when reading a nal that ends
                 # exactly at the end of the data
-                if i + 3 >= len(buf):
-                    nal_end = len(buf)
+                if i + 3 >= buflen:
+                    nal_end = buflen
                     yield buf[nal_start:nal_end]
                     return  # did not find nal end, stream ended first
             nal_end = i
