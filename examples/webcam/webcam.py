@@ -10,6 +10,7 @@ from aiohttp import web
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaPlayer, MediaRelay, NativeMediaRelay
+from aiortc.rtcrtpsender import RTCRtpSender
 
 ROOT = os.path.dirname(__file__)
 
@@ -72,12 +73,19 @@ async def offer(request):
     # open media source
     audio, video = create_local_tracks(args.play_from, transcode=args.transcode)
 
+    if video:
+        pc.addTrack(video)
+        if args.preferred_codec:
+            # Filter for only for the preferred_codec
+            codecs = RTCRtpSender.getCapabilities("video").codecs
+            preferences = [codec for codec in codecs if codec.mimeType == args.preferred_codec]
+            transceiver = pc.getTransceivers()[0]
+            transceiver.setCodecPreferences(preferences)
+
     await pc.setRemoteDescription(offer)
     for t in pc.getTransceivers():
         if t.kind == "audio" and audio:
             pc.addTrack(audio)
-        elif t.kind == "video" and video:
-            pc.addTrack(video)
 
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
@@ -112,6 +120,7 @@ if __name__ == "__main__":
         "--port", type=int, default=8080, help="Port for HTTP server (default: 8080)"
     )
     parser.add_argument("--verbose", "-v", action="count")
+    parser.add_argument("--preferred-codec", help="Preferred codec to use (e.g. video/H264)")
 
     transcode_parser = parser.add_mutually_exclusive_group(required=False)
     transcode_parser.add_argument('--transcode', dest='transcode', action='store_true')
