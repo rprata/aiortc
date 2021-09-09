@@ -19,14 +19,15 @@ relay = None
 webcam = None
 
 
-def create_local_tracks(play_from, transcode=True):
+def create_local_tracks(play_from, transcode=True, options=None):
     global relay, webcam
 
     if play_from:
         player = MediaPlayer(play_from, transcode=transcode)
         return player.audio, player.video
     else:
-        options = {"framerate": "30", "video_size": "640x480"}
+        if options is None:
+            options = {"framerate": "30", "video_size": "640x480"}
         if relay is None:
             if platform.system() == "Darwin":
                 webcam = MediaPlayer(
@@ -37,7 +38,7 @@ def create_local_tracks(play_from, transcode=True):
                     "video=Integrated Camera", format="dshow", options=options
                 )
             else:
-                webcam = MediaPlayer("/dev/video0", format="v4l2", transcode=transcode, options={"video_size": "1920x1080", "framerate": "30", "input_format": "h264"})
+                webcam = MediaPlayer("/dev/video0", format="v4l2", transcode=transcode, options=options)
 
             if transcode:
                 relay = MediaRelay()
@@ -71,7 +72,7 @@ async def offer(request):
             pcs.discard(pc)
 
     # open media source
-    audio, video = create_local_tracks(args.play_from, transcode=args.transcode)
+    audio, video = create_local_tracks(args.play_from, transcode=args.transcode, options=args.video_options)
 
     if video:
         pc.addTrack(video)
@@ -121,6 +122,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--verbose", "-v", action="count")
     parser.add_argument("--preferred-codec", help="Preferred codec to use (e.g. video/H264)")
+    parser.add_argument("--video-options", type=json.loads, help="Options to pass into av.open")
 
     transcode_parser = parser.add_mutually_exclusive_group(required=False)
     transcode_parser.add_argument('--transcode', dest='transcode', action='store_true')
