@@ -9,7 +9,7 @@ import ssl
 from aiohttp import web
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaPlayer, MediaRelay
+from aiortc.contrib.media import MediaPlayer, MediaRelay, NativeMediaRelay
 
 ROOT = os.path.dirname(__file__)
 
@@ -18,11 +18,11 @@ relay = None
 webcam = None
 
 
-def create_local_tracks(play_from):
+def create_local_tracks(play_from, transcode=True):
     global relay, webcam
 
     if play_from:
-        player = MediaPlayer(play_from)
+        player = MediaPlayer(play_from, transcode=transcode)
         return player.audio, player.video
     else:
         options = {"framerate": "30", "video_size": "640x480"}
@@ -36,8 +36,12 @@ def create_local_tracks(play_from):
                     "video=Integrated Camera", format="dshow", options=options
                 )
             else:
-                webcam = MediaPlayer("/dev/video0", format="v4l2", options=options)
-            relay = MediaRelay()
+                webcam = MediaPlayer("/dev/video0", format="v4l2", transcode=transcode, options={"video_size": "1920x1080", "framerate": "30", "input_format": "h264"})
+
+            if transcode:
+                relay = MediaRelay()
+            else:
+                relay = NativeMediaRelay()
         return None, relay.subscribe(webcam.video)
 
 
@@ -66,7 +70,7 @@ async def offer(request):
             pcs.discard(pc)
 
     # open media source
-    audio, video = create_local_tracks(args.play_from)
+    audio, video = create_local_tracks(args.play_from, transcode=args.transcode)
 
     await pc.setRemoteDescription(offer)
     for t in pc.getTransceivers():
@@ -108,6 +112,12 @@ if __name__ == "__main__":
         "--port", type=int, default=8080, help="Port for HTTP server (default: 8080)"
     )
     parser.add_argument("--verbose", "-v", action="count")
+
+    transcode_parser = parser.add_mutually_exclusive_group(required=False)
+    transcode_parser.add_argument('--transcode', dest='transcode', action='store_true')
+    transcode_parser.add_argument('--no-transcode', dest='transcode', action='store_false')
+    parser.set_defaults(transcode=True)
+
     args = parser.parse_args()
 
     if args.verbose:
