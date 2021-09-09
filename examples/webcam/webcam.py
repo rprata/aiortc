@@ -9,7 +9,7 @@ import ssl
 from aiohttp import web
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaPlayer, MediaRelay, NativeMediaRelay
+from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.rtcrtpsender import RTCRtpSender
 
 ROOT = os.path.dirname(__file__)
@@ -40,10 +40,7 @@ def create_local_tracks(play_from, transcode=True, options=None):
             else:
                 webcam = MediaPlayer("/dev/video0", format="v4l2", transcode=transcode, options=options)
 
-            if transcode:
-                relay = MediaRelay()
-            else:
-                relay = NativeMediaRelay()
+            relay = MediaRelay()
         return None, relay.subscribe(webcam.video)
 
 

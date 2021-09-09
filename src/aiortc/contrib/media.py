@@ -500,68 +500,7 @@ class RelayStreamTrack(MediaStreamTrack):
             self._source = None
 
 
-class MediaRelay:
-    """
-    A media source that relays one or more tracks to multiple consumers.
-
-    This is especially useful for live tracks such as webcams or media received
-    over the network.
-    """
-
-    def __init__(self) -> None:
-        self.__proxies: Dict[MediaStreamTrack, Set[RelayStreamTrack]] = {}
-        self.__tasks: Dict[MediaStreamTrack, asyncio.Future[None]] = {}
-
-    def subscribe(self, track: MediaStreamTrack) -> MediaStreamTrack:
-        """
-        Create a proxy around the given `track` for a new consumer.
-        """
-        proxy = RelayStreamTrack(self, track)
-        self.__log_debug("Create proxy %s for source %s", id(proxy), id(track))
-        if track not in self.__proxies:
-            self.__proxies[track] = set()
-        return proxy
-
-    def _start(self, proxy: RelayStreamTrack) -> None:
-        track = proxy._source
-        if track is not None and track in self.__proxies:
-            # register proxy
-            if proxy not in self.__proxies[track]:
-                self.__log_debug("Start proxy %s", id(proxy))
-                self.__proxies[track].add(proxy)
-
-            # start worker
-            if track not in self.__tasks:
-                self.__tasks[track] = asyncio.ensure_future(self.__run_track(track))
-
-    def _stop(self, proxy: RelayStreamTrack) -> None:
-        track = proxy._source
-        if track is not None and track in self.__proxies:
-            # unregister proxy
-            self.__log_debug("Stop proxy %s", id(proxy))
-            self.__proxies[track].discard(proxy)
-
-    def __log_debug(self, msg: str, *args) -> None:
-        logger.debug(f"MediaRelay(%s) {msg}", id(self), *args)
-
-    async def __run_track(self, track: MediaStreamTrack) -> None:
-        self.__log_debug("Start reading source %s" % id(track))
-
-        while True:
-            try:
-                frame = await track.recv()
-            except MediaStreamError:
-                frame = None
-            for proxy in self.__proxies[track]:
-                proxy._queue.put_nowait(frame)
-            if frame is None:
-                break
-
-        self.__log_debug("Stop reading source %s", id(track))
-        del self.__proxies[track]
-        del self.__tasks[track]
-
-class NativeRelayStreamTrack(MediaStreamNativeTrack):
+class RelayStreamNativeTrack(MediaStreamNativeTrack):
     def __init__(self, relay, source: MediaStreamNativeTrack) -> None:
         super().__init__()
         self.kind = source.kind
@@ -587,7 +526,8 @@ class NativeRelayStreamTrack(MediaStreamNativeTrack):
             self._relay = None
             self._source = None
 
-class NativeMediaRelay:
+
+class MediaRelay:
     """
     A media source that relays one or more tracks to multiple consumers.
 
@@ -596,20 +536,26 @@ class NativeMediaRelay:
     """
 
     def __init__(self) -> None:
-        self.__proxies: Dict[MediaStreamNativeTrack, Set[NativeRelayStreamTrack]] = {}
-        self.__tasks: Dict[MediaStreamNativeTrack, asyncio.Future[None]] = {}
+        self.__proxies: Dict[Union[MediaStreamTrack, MediaStreamNativeTrack], Set[RelayStreamTrack]] = {}
+        self.__tasks: Dict[Union[MediaStreamTrack, MediaStreamNativeTrack], asyncio.Future[None]] = {}
 
-    def subscribe(self, track: MediaStreamNativeTrack) -> MediaStreamNativeTrack:
+    def subscribe(
+        self, 
+        track: Union[MediaStreamTrack, MediaStreamNativeTrack]
+    ) -> Union[MediaStreamTrack, MediaStreamNativeTrack]:
         """
         Create a proxy around the given `track` for a new consumer.
         """
-        proxy = NativeRelayStreamTrack(self, track)
+        if isinstance(track, MediaStreamTrack):
+            proxy = RelayStreamTrack(self, track)
+        else:
+            proxy = RelayStreamNativeTrack(self, track)
         self.__log_debug("Create proxy %s for source %s", id(proxy), id(track))
         if track not in self.__proxies:
             self.__proxies[track] = set()
         return proxy
 
-    def _start(self, proxy: MediaStreamNativeTrack) -> None:
+    def _start(self, proxy: Union[RelayStreamTrack, RelayStreamNativeTrack]) -> None:
         track = proxy._source
         if track is not None and track in self.__proxies:
             # register proxy
@@ -621,7 +567,7 @@ class NativeMediaRelay:
             if track not in self.__tasks:
                 self.__tasks[track] = asyncio.ensure_future(self.__run_track(track))
 
-    def _stop(self, proxy: MediaStreamNativeTrack) -> None:
+    def _stop(self, proxy: Union[RelayStreamTrack, RelayStreamNativeTrack]) -> None:
         track = proxy._source
         if track is not None and track in self.__proxies:
             # unregister proxy
@@ -631,7 +577,7 @@ class NativeMediaRelay:
     def __log_debug(self, msg: str, *args) -> None:
         logger.debug(f"MediaRelay(%s) {msg}", id(self), *args)
 
-    async def __run_track(self, track: MediaStreamNativeTrack) -> None:
+    async def __run_track(self, track: Union[MediaStreamTrack, MediaStreamNativeTrack]) -> None:
         self.__log_debug("Start reading source %s" % id(track))
 
         while True:
