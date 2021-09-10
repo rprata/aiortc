@@ -42,7 +42,7 @@ def create_local_tracks(play_from, transcode=True, options=None):
                 webcam = MediaPlayer("/dev/video0", format="v4l2", transcode=transcode, options=options)
 
             relay = MediaRelay()
-        return None, relay.subscribe(webcam.video, buffered=False)
+        return None, relay.subscribe(webcam.video, buffered=True)
 
 
 async def index(request):
