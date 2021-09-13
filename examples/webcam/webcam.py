@@ -16,7 +16,7 @@ from aiortc.rtcrtpsender import RTCRtpSender
 ROOT = os.path.dirname(__file__)
 # Max number of connections allowed. When this number is exceeded,
 # new client connections will force old clients to close
-MAX_CONNECTIONS = 2
+MAX_CONNECTIONS = 5
 
 relay = None
 webcam = None
