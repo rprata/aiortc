@@ -1,12 +1,14 @@
 import asyncio
 import fractions
+from struct import pack_into
 import time
 import uuid
 from abc import ABCMeta, abstractmethod
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 from av import AudioFrame, VideoFrame
 from av.frame import Frame
+from av.packet import Packet
 from pyee import AsyncIOEventEmitter
 
 AUDIO_PTIME = 0.020  # 20ms audio packetization
@@ -50,47 +52,10 @@ class MediaStreamTrack(AsyncIOEventEmitter, metaclass=ABCMeta):
         return "ended" if self.__ended else "live"
 
     @abstractmethod
-    async def recv(self) -> Frame:
+    async def recv(self) -> Union[Frame, Packet]:
         """
-        Receive the next :class:`~av.audio.frame.AudioFrame` or :class:`~av.video.frame.VideoFrame`.
-        """
-
-    def stop(self) -> None:
-        if not self.__ended:
-            self.__ended = True
-            self.emit("ended")
-
-            # no more events will be emitted, so remove all event listeners
-            # to facilitate garbage collection.
-            self.remove_all_listeners()
-
-class MediaStreamNativeTrack(AsyncIOEventEmitter, metaclass=ABCMeta):
-    """
-    A single media track within a stream.
-    """
-
-    kind = "unknown"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.__ended = False
-        self._id = str(uuid.uuid4())
-
-    @property
-    def id(self) -> str:
-        """
-        An automatically generated globally unique ID.
-        """
-        return self._id
-
-    @property
-    def readyState(self) -> str:
-        return "ended" if self.__ended else "live"
-
-    @abstractmethod
-    async def recv(self) -> Tuple[List[bytes], int]:
-        """
-        Receive the next :class:`~av.packet.Packet`.
+        Receive the next :class:`~av.audio.frame.AudioFrame`, :class:`~av.video.frame.VideoFrame`
+        or :class:`~av.video.frame.VideoFrame`
         """
 
     def stop(self) -> None:
@@ -181,9 +146,9 @@ class VideoStreamTrack(MediaStreamTrack):
         frame.time_base = time_base
         return frame
 
-class VideoStreamNativeTrack(MediaStreamNativeTrack):
+class VideoStreamNativeTrack(MediaStreamTrack):
     """
-    A dummy video native track which reads a buffer. Nothing appears in screen.
+    A dummy video  track which reads a buffer. Nothing appears in screen.
     """
 
     kind = "video"
@@ -204,16 +169,19 @@ class VideoStreamNativeTrack(MediaStreamNativeTrack):
             self._timestamp = 0
         return self._timestamp, VIDEO_TIME_BASE
 
-    async def recv(self):
+    async def recv(self) -> Packet:
         """
         Receive the next :class:`~av.packet.Packet`.
 
         The base implementation just reads a buffer.
         """
         pts, time_base = await self.next_timestamp()
+        
+        buffer_size = 1300
+        packet = Packet(buffer_size)
+        packet.update(bytes(buffer_size))
+        packet.dts = pts
+        packet.time_base = time_base
 
-        buffer = []
-        buffer.append(bytes(1300))
-
-        return buffer, int(pts * time_base)
+        return packet
 

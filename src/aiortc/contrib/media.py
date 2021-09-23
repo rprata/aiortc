@@ -12,10 +12,9 @@ from av import AudioFrame, VideoFrame
 from av.audio.stream import AudioStream
 from av.video.stream import VideoStream
 from av.frame import Frame
+from av.packet import Packet
 
-from aiortc.codecs.h264 import H264Encoder
-
-from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamNativeTrack, MediaStreamTrack
+from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamTrack
 
 logger = logging.getLogger(__name__)
 
@@ -208,60 +207,36 @@ class PlayerStreamTrack(MediaStreamTrack):
         self._queue = asyncio.Queue()
         self._start = None
 
-    async def recv(self):
+    async def recv(self) -> Union[Frame, Packet]:
         if self.readyState != "live":
             raise MediaStreamError
 
         self._player._start(self)
-        frame = await self._queue.get()
-        if frame is None:
+        data = await self._queue.get()
+        if data is None:
             self.stop()
             raise MediaStreamError
-        frame_time = frame.time
+        if isinstance(data, Frame):
+            data_time = data.time
+        elif isinstance(data, Packet):
+            data_time = data.dts
+        else:
+            raise MediaStreamError
 
         # control playback rate
         if (
             self._player is not None
             and self._player._throttle_playback
-            and frame_time is not None
+            and data_time is not None
+            and isinstance(data, Frame)
         ):
             if self._start is None:
-                self._start = time.time() - frame_time
+                self._start = time.time() - data_time
             else:
-                wait = self._start + frame_time - time.time()
+                wait = self._start + data_time - time.time()
                 await asyncio.sleep(wait)
 
-        return frame
-
-    def stop(self):
-        super().stop()
-        if self._player is not None:
-            self._player._stop(self)
-            self._player = None
-
-class PlayerStreamNativeTrack(MediaStreamNativeTrack):
-    def __init__(self, player, kind):
-        super().__init__()
-        self.kind = kind
-        self._player = player
-        self._queue = asyncio.Queue()
-        self._start = None
-        self._h264_encoder = H264Encoder()
-
-    async def recv(self):
-        if self.readyState != "live":
-            raise MediaStreamError
-
-        self._player._start(self)
-        packet = await self._queue.get()
-        if packet is None:
-            self.stop()
-            raise MediaStreamError
-
-        # It's necessary to packetize data to complete h264 packet
-        # Using H264Encoder::_split_bitstream and H264Encoder::_packetize
-        data = self._h264_encoder._split_bitstream(packet.to_bytes())
-        return self._h264_encoder._packetize(data), int(packet.dts)
+        return data
 
     def stop(self):
         super().stop()
@@ -311,23 +286,17 @@ class MediaPlayer:
         self.__thread_quit: Optional[threading.Event] = None
 
         # examine streams
-        self.__started: Set[Union[PlayerStreamTrack, PlayerStreamNativeTrack]] = set()
+        self.__started: Set[PlayerStreamTrack] = set()
         self.__streams = []
         self.__transcode = transcode
-        self.__audio: Union[Optional[PlayerStreamTrack], Optional[PlayerStreamNativeTrack]] = None
-        self.__video: Union[Optional[PlayerStreamTrack], Optional[PlayerStreamNativeTrack]] = None
+        self.__audio: Optional[PlayerStreamTrack] = None
+        self.__video: Optional[PlayerStreamTrack] = None
         for stream in self.__container.streams:
             if stream.type == "audio" and not self.__audio:
-                if transcode:
-                    self.__audio = PlayerStreamTrack(self, kind="audio")
-                else:
-                    self.__audio = PlayerStreamNativeTrack(self, kind="audio")
+                self.__audio = PlayerStreamTrack(self, kind="audio")
                 self.__streams.append(stream)
             elif stream.type == "video" and not self.__video:
-                if transcode:
-                    self.__video = PlayerStreamTrack(self, kind="video")
-                else:
-                    self.__video = PlayerStreamNativeTrack(self, kind="video")
+                self.__video = PlayerStreamTrack(self, kind="video")
                 self.__streams.append(stream)
 
         # check whether we need to throttle playback
@@ -499,34 +468,6 @@ class RelayStreamTrack(MediaStreamTrack):
             self._relay = None
             self._source = None
 
-
-class RelayStreamNativeTrack(MediaStreamNativeTrack):
-    def __init__(self, relay, source: MediaStreamNativeTrack) -> None:
-        super().__init__()
-        self.kind = source.kind
-        self._relay = relay
-        self._queue: asyncio.Queue[Optional[Frame]] = asyncio.Queue()
-        self._source: Optional[MediaStreamNativeTrack] = source
-
-    async def recv(self):
-        if self.readyState != "live":
-            raise MediaStreamError
-
-        self._relay._start(self)
-        frame = await self._queue.get()
-        if frame is None:
-            self.stop()
-            raise MediaStreamError
-        return frame
-
-    def stop(self):
-        super().stop()
-        if self._relay is not None:
-            self._relay._stop(self)
-            self._relay = None
-            self._source = None
-
-
 class MediaRelay:
     """
     A media source that relays one or more tracks to multiple consumers.
@@ -536,26 +477,24 @@ class MediaRelay:
     """
 
     def __init__(self) -> None:
-        self.__proxies: Dict[Union[MediaStreamTrack, MediaStreamNativeTrack], Set[RelayStreamTrack]] = {}
-        self.__tasks: Dict[Union[MediaStreamTrack, MediaStreamNativeTrack], asyncio.Future[None]] = {}
+        self.__proxies: Dict[Union[MediaStreamTrack], Set[RelayStreamTrack]] = {}
+        self.__tasks: Dict[Union[MediaStreamTrack], asyncio.Future[None]] = {}
 
     def subscribe(
         self, 
-        track: Union[MediaStreamTrack, MediaStreamNativeTrack]
-    ) -> Union[MediaStreamTrack, MediaStreamNativeTrack]:
+        track: Union[MediaStreamTrack]
+    ) -> Union[MediaStreamTrack]:
         """
         Create a proxy around the given `track` for a new consumer.
         """
         if isinstance(track, MediaStreamTrack):
             proxy = RelayStreamTrack(self, track)
-        else:
-            proxy = RelayStreamNativeTrack(self, track)
         self.__log_debug("Create proxy %s for source %s", id(proxy), id(track))
         if track not in self.__proxies:
             self.__proxies[track] = set()
         return proxy
 
-    def _start(self, proxy: Union[RelayStreamTrack, RelayStreamNativeTrack]) -> None:
+    def _start(self, proxy: RelayStreamTrack) -> None:
         track = proxy._source
         if track is not None and track in self.__proxies:
             # register proxy
@@ -567,7 +506,7 @@ class MediaRelay:
             if track not in self.__tasks:
                 self.__tasks[track] = asyncio.ensure_future(self.__run_track(track))
 
-    def _stop(self, proxy: Union[RelayStreamTrack, RelayStreamNativeTrack]) -> None:
+    def _stop(self, proxy: RelayStreamTrack) -> None:
         track = proxy._source
         if track is not None and track in self.__proxies:
             # unregister proxy
@@ -577,7 +516,7 @@ class MediaRelay:
     def __log_debug(self, msg: str, *args) -> None:
         logger.debug(f"MediaRelay(%s) {msg}", id(self), *args)
 
-    async def __run_track(self, track: Union[MediaStreamTrack, MediaStreamNativeTrack]) -> None:
+    async def __run_track(self, track: MediaStreamTrack) -> None:
         self.__log_debug("Start reading source %s" % id(track))
 
         while True:

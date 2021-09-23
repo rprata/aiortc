@@ -5,6 +5,7 @@ from typing import List, Tuple, Type, TypeVar, cast
 
 from av import VideoFrame
 from av.frame import Frame
+from av.packet import Packet
 
 from ..jitterbuffer import JitterFrame
 from ..mediastreams import VIDEO_CLOCK_RATE, VIDEO_TIME_BASE, convert_timebase
@@ -363,6 +364,11 @@ class Vp8Encoder(Encoder):
 
         timestamp = convert_timebase(frame.pts, frame.time_base, VIDEO_TIME_BASE)
         return payloads, timestamp
+
+    def pack(
+        self, packet: Packet
+    ) -> Tuple[List[bytes], int]:
+        [packet.to_bytes()], int(packet.dts)
 
     @property
     def target_bitrate(self) -> int:

@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 
 from av import AudioFrame
 from av.frame import Frame
+from av.packet import Packet
 
 from ..jitterbuffer import JitterFrame
 from ._opus import ffi, lib
@@ -97,3 +98,8 @@ class OpusEncoder(Encoder):
         assert length > 0
 
         return [self.buffer[0:length]], timestamp
+
+    def pack(
+        self, packet: Packet
+    ) -> Tuple[List[bytes], int]:
+        [packet.to_bytes()], int(packet.dts)
