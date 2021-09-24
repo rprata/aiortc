@@ -7,7 +7,7 @@ import time
 
 import aiohttp
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, VideoStreamNativeTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaPlayer, MediaRecorder
 
 pcs = set()
@@ -113,10 +113,8 @@ async def publish(plugin, player, transcode):
     if player and player.video:
         pc.addTrack(player.video)
     else:
-        if transcode:
-            pc.addTrack(VideoStreamTrack())
-        else:
-            pc.addTrack(VideoStreamNativeTrack())
+        # video dummy will always transcode
+        pc.addTrack(VideoStreamTrack())
 
     # send offer
     await pc.setLocalDescription(await pc.createOffer())

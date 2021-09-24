@@ -477,18 +477,17 @@ class MediaRelay:
     """
 
     def __init__(self) -> None:
-        self.__proxies: Dict[Union[MediaStreamTrack], Set[RelayStreamTrack]] = {}
-        self.__tasks: Dict[Union[MediaStreamTrack], asyncio.Future[None]] = {}
+        self.__proxies: Dict[MediaStreamTrack, Set[RelayStreamTrack]] = {}
+        self.__tasks: Dict[MediaStreamTrack, asyncio.Future[None]] = {}
 
     def subscribe(
         self, 
-        track: Union[MediaStreamTrack]
-    ) -> Union[MediaStreamTrack]:
+        track: MediaStreamTrack
+    ) -> MediaStreamTrack:
         """
         Create a proxy around the given `track` for a new consumer.
         """
-        if isinstance(track, MediaStreamTrack):
-            proxy = RelayStreamTrack(self, track)
+        proxy = RelayStreamTrack(self, track)
         self.__log_debug("Create proxy %s for source %s", id(proxy), id(track))
         if track not in self.__proxies:
             self.__proxies[track] = set()
