@@ -55,7 +55,7 @@ class MediaStreamTrack(AsyncIOEventEmitter, metaclass=ABCMeta):
     async def recv(self) -> Union[Frame, Packet]:
         """
         Receive the next :class:`~av.audio.frame.AudioFrame`, :class:`~av.video.frame.VideoFrame`
-        or :class:`~av.video.frame.VideoFrame`
+        or :class:`~av.packet.Packet`
         """
 
     def stop(self) -> None:
