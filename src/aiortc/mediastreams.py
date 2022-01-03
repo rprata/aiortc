@@ -1,10 +1,9 @@
 import asyncio
 import fractions
-from struct import pack_into
 import time
 import uuid
 from abc import ABCMeta, abstractmethod
-from typing import List, Tuple, Union
+from typing import Tuple, Union
 
 from av import AudioFrame, VideoFrame
 from av.frame import Frame
@@ -15,6 +14,7 @@ AUDIO_PTIME = 0.020  # 20ms audio packetization
 VIDEO_CLOCK_RATE = 90000
 VIDEO_PTIME = 1 / 30  # 30fps
 VIDEO_TIME_BASE = fractions.Fraction(1, VIDEO_CLOCK_RATE)
+
 
 def convert_timebase(
     pts: int, from_base: fractions.Fraction, to_base: fractions.Fraction
@@ -66,6 +66,7 @@ class MediaStreamTrack(AsyncIOEventEmitter, metaclass=ABCMeta):
             # no more events will be emitted, so remove all event listeners
             # to facilitate garbage collection.
             self.remove_all_listeners()
+
 
 class AudioStreamTrack(MediaStreamTrack):
     """

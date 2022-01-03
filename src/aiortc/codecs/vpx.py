@@ -365,9 +365,7 @@ class Vp8Encoder(Encoder):
         timestamp = convert_timebase(frame.pts, frame.time_base, VIDEO_TIME_BASE)
         return payloads, timestamp
 
-    def pack(
-        self, packet: Packet
-    ) -> Tuple[List[bytes], int]:
+    def pack(self, packet: Packet) -> Tuple[List[bytes], int]:
         [packet.to_bytes()], int(packet.dts)
 
     @property

@@ -7,7 +7,6 @@ import uuid
 from typing import Dict, List, Optional, Union
 
 from av.frame import Frame
-from av.packet import Packet
 
 from . import clock, rtp
 from .codecs import get_capabilities, get_encoder, is_rtx
@@ -247,7 +246,7 @@ class RTCRtpSender:
                 pass
 
     async def _next_encoded_frame(self, codec: RTCRtpCodecParameters):
-        
+
         data = await self.__track.recv()
         if self.__encoder is None:
             self.__encoder = get_encoder(codec)
@@ -258,7 +257,7 @@ class RTCRtpSender:
             self.__force_keyframe = False
             return await self.__loop.run_in_executor(
                 None, self.__encoder.encode, data, force_keyframe
-            )        
+            )
         else:
             return self.__encoder.pack(data)
 

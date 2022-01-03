@@ -5,14 +5,13 @@ import logging
 import threading
 import time
 from typing import Dict, Optional, Set, Union
-from struct import pack
 
 import av
 from av import AudioFrame, VideoFrame
 from av.audio.stream import AudioStream
-from av.video.stream import VideoStream
 from av.frame import Frame
 from av.packet import Packet
+from av.video.stream import VideoStream
 
 from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamTrack
 
@@ -85,7 +84,14 @@ class MediaBlackhole:
 
 
 def player_worker(
-    loop, container, streams, audio_track, video_track, quit_event, throttle_playback, transcode
+    loop,
+    container,
+    streams,
+    audio_track,
+    video_track,
+    quit_event,
+    throttle_playback,
+    transcode,
 ):
     audio_fifo = av.AudioFifo()
     audio_format_name = "s16"
@@ -149,7 +155,8 @@ def player_worker(
             elif isinstance(frame, VideoFrame) and video_track:
                 if frame.pts is None:  # pragma: no cover
                     logger.warning(
-                        "MediaPlayer(%s) Skipping video frame with no pts", container.name
+                        "MediaPlayer(%s) Skipping video frame with no pts",
+                        container.name,
                     )
                     continue
 
@@ -172,7 +179,7 @@ def player_worker(
                 if video_track:
                     asyncio.run_coroutine_threadsafe(video_track._queue.put(None), loop)
                 break
-                
+
             # read up to 1 second ahead
             if throttle_playback:
                 elapsed_time = time.time() - start_time
@@ -185,7 +192,8 @@ def player_worker(
             elif isinstance(*streams, VideoStream):
                 if packet.pts is None:
                     logger.warning(
-                        "MediaPlayer(%s) Skipping video packet with no pts", container.name
+                        "MediaPlayer(%s) Skipping video packet with no pts",
+                        container.name,
                     )
                     continue
 
@@ -198,7 +206,8 @@ def player_worker(
                 asyncio.run_coroutine_threadsafe(video_track._queue.put(packet), loop)
             else:
                 continue
-            
+
+
 class PlayerStreamTrack(MediaStreamTrack):
     def __init__(self, player, kind):
         super().__init__()
@@ -243,6 +252,7 @@ class PlayerStreamTrack(MediaStreamTrack):
         if self._player is not None:
             self._player._stop(self)
             self._player = None
+
 
 class MediaPlayer:
     """
@@ -333,7 +343,7 @@ class MediaPlayer:
                     self.__video,
                     self.__thread_quit,
                     self._throttle_playback,
-                    self.__transcode
+                    self.__transcode,
                 ),
             )
             self.__thread.start()
@@ -468,6 +478,7 @@ class RelayStreamTrack(MediaStreamTrack):
             self._relay = None
             self._source = None
 
+
 class MediaRelay:
     """
     A media source that relays one or more tracks to multiple consumers.
@@ -480,10 +491,7 @@ class MediaRelay:
         self.__proxies: Dict[MediaStreamTrack, Set[RelayStreamTrack]] = {}
         self.__tasks: Dict[MediaStreamTrack, asyncio.Future[None]] = {}
 
-    def subscribe(
-        self, 
-        track: MediaStreamTrack
-    ) -> MediaStreamTrack:
+    def subscribe(self, track: MediaStreamTrack) -> MediaStreamTrack:
         """
         Create a proxy around the given `track` for a new consumer.
         """

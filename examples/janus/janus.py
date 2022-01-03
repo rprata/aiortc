@@ -224,10 +224,12 @@ if __name__ == "__main__":
     parser.add_argument("--play-from", help="Read the media from a file and sent it."),
     parser.add_argument("--record-to", help="Write received media to a file."),
     parser.add_argument("--verbose", "-v", action="count")
-    
+
     transcode_parser = parser.add_mutually_exclusive_group(required=False)
-    transcode_parser.add_argument('--transcode', dest='transcode', action='store_true')
-    transcode_parser.add_argument('--no-transcode', dest='transcode', action='store_false')
+    transcode_parser.add_argument("--transcode", dest="transcode", action="store_true")
+    transcode_parser.add_argument(
+        "--no-transcode", dest="transcode", action="store_false"
+    )
     parser.set_defaults(transcode=True)
 
     args = parser.parse_args()
@@ -254,11 +256,11 @@ if __name__ == "__main__":
     try:
         loop.run_until_complete(
             run(
-                player=player, 
-                recorder=recorder, 
-                room=args.room, 
-                session=session, 
-                transcode=args.transcode
+                player=player,
+                recorder=recorder,
+                room=args.room,
+                session=session,
+                transcode=args.transcode,
             )
         )
     except KeyboardInterrupt:

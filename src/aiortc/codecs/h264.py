@@ -229,7 +229,7 @@ class H264Encoder(Encoder):
             # Find the start of the NAL unit
             # NAL Units start with a 3-byte or 4 byte start code of 0x000001 or 0x00000001
             # while buf[i:i+3] != b'\x00\x00\x01':
-            i = buf.find(b'\x00\x00\x01', i)
+            i = buf.find(b"\x00\x00\x01", i)
             if i == -1:
                 return
 
@@ -238,13 +238,13 @@ class H264Encoder(Encoder):
             nal_start = i
 
             # Find the end of the NAL unit (end of buffer OR next start code)
-            i = buf.find(b'\x00\x00\x01', i)
+            i = buf.find(b"\x00\x00\x01", i)
             if i == -1:
-                yield buf[nal_start:len(buf)]
+                yield buf[nal_start : len(buf)]
                 return
             elif buf[i - 1] == 0:
                 # 4-byte start code case, jump back one byte
-                yield buf[nal_start:i - 1]
+                yield buf[nal_start : i - 1]
             else:
                 yield buf[nal_start:i]
 
@@ -317,9 +317,7 @@ class H264Encoder(Encoder):
         timestamp = convert_timebase(frame.pts, frame.time_base, VIDEO_TIME_BASE)
         return self._packetize(packages), timestamp
 
-    def pack(
-        self, packet: Packet
-    ) -> Tuple[List[bytes], int]:
+    def pack(self, packet: Packet) -> Tuple[List[bytes], int]:
         assert isinstance(packet, av.Packet)
         packages = self._split_bitstream(packet.to_bytes())
         return self._packetize(packages), int(packet.dts)

@@ -99,7 +99,5 @@ class OpusEncoder(Encoder):
 
         return [self.buffer[0:length]], timestamp
 
-    def pack(
-        self, packet: Packet
-    ) -> Tuple[List[bytes], int]:
+    def pack(self, packet: Packet) -> Tuple[List[bytes], int]:
         [packet.to_bytes()], int(packet.dts)
