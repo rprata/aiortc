@@ -186,10 +186,10 @@ def player_worker(
                 if frame_time and frame_time > elapsed_time + 1:
                     time.sleep(0.1)
 
-            if isinstance(*streams, AudioStream):
+            if isinstance(packet.stream, AudioStream):
                 frame_time = int(packet.pts * packet.time_base)
                 asyncio.run_coroutine_threadsafe(audio_track._queue.put(packet), loop)
-            elif isinstance(*streams, VideoStream):
+            elif isinstance(packet.stream, VideoStream):
                 if packet.pts is None:
                     logger.warning(
                         "MediaPlayer(%s) Skipping video packet with no pts",
