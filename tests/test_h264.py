@@ -182,6 +182,10 @@ class H264Test(CodecTestCase):
         self.roundtrip_video(H264_CODEC, 320, 240)
 
     def test_split_bitstream(self):
+        # No start code
+        packages = list(H264Encoder._split_bitstream(b"\x00\x00\x00\x00"))
+        self.assertEqual(packages, [])
+
         # 3-byte start code
         packages = list(
             H264Encoder._split_bitstream(b"\x00\x00\x01\xFF\x00\x00\x01\xFB")
@@ -212,7 +216,7 @@ class H264Test(CodecTestCase):
                 b"\x00\x00\x00\x00\x00\x00\x01\xFF\x00\x00\x00\x00\x00"
             )
         )
-        self.assertEqual(packages, [b"\xFF"])
+        self.assertEqual(packages, [b"\xFF\x00\x00\x00\x00\x00"])
 
     def test_packetize_one_small(self):
         packages = [bytes([0xFF, 0xFF])]
