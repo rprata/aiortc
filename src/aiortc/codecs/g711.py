@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 
 from av import AudioFrame
 from av.frame import Frame
+from av.packet import Packet
 
 from ..jitterbuffer import JitterFrame
 from .base import Decoder, Encoder
@@ -68,6 +69,9 @@ class PcmEncoder(ABC, Encoder):
 
         data = self._convert(data, SAMPLE_WIDTH)
         return [data], timestamp
+
+    def pack(self, packet: Packet) -> Tuple[List[bytes], int]:
+        [packet.to_bytes()], int(packet.dts)
 
 
 class PcmaDecoder(PcmDecoder):
