@@ -146,3 +146,42 @@ class VideoStreamTrack(MediaStreamTrack):
         frame.pts = pts
         frame.time_base = time_base
         return frame
+
+
+class VideoNativeStreamTrack(MediaStreamTrack):
+    """
+    A dummy video native track which reads green frames.
+    """
+
+    kind = "video"
+
+    _start: float
+    _timestamp: int
+
+    async def next_timestamp(self) -> Tuple[int, fractions.Fraction]:
+        if self.readyState != "live":
+            raise MediaStreamError
+
+        if hasattr(self, "_timestamp"):
+            self._timestamp += int(VIDEO_PTIME * VIDEO_CLOCK_RATE)
+            wait = self._start + (self._timestamp / VIDEO_CLOCK_RATE) - time.time()
+            await asyncio.sleep(wait)
+        else:
+            self._start = time.time()
+            self._timestamp = 0
+        return self._timestamp, VIDEO_TIME_BASE
+
+    async def recv(self) -> Packet:
+        """
+        Receive the next :class:`~av.packet.Packet`.
+
+        The base implementation dummy packet h264 for tests
+        """
+        pts, time_base = await self.next_timestamp()
+        header = [0, 0, 0, 1]
+        buffer = header + [0] * 1020
+        packet = Packet(len(buffer))
+        packet.update(bytes(buffer))
+        packet.dts = pts
+        packet.pts = pts
+        return packet

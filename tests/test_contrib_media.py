@@ -441,6 +441,38 @@ class MediaPlayerTest(MediaTestCase):
         with self.assertRaises(MediaStreamError):
             run(player.video.recv())
 
+    def test_audio_and_video_file_no_transcode(self):
+        path = self.create_audio_and_video_file(name="test.mp4", duration=5)
+        player = MediaPlayer(path, transcode=False)
+
+        # check tracks
+        self.assertIsNotNone(player.audio)
+        self.assertIsNotNone(player.video)
+
+        # read some frames
+        self.assertEqual(player.audio.readyState, "live")
+        self.assertEqual(player.video.readyState, "live")
+        for i in range(10):
+            run(asyncio.gather(player.audio.recv(), player.video.recv()))
+
+        # stop audio track
+        player.audio.stop()
+
+        # continue reading
+        for i in range(10):
+            with self.assertRaises(MediaStreamError):
+                run(player.audio.recv())
+            run(player.video.recv())
+
+        # stop video track
+        player.video.stop()
+
+        # continue reading
+        with self.assertRaises(MediaStreamError):
+            run(player.audio.recv())
+        with self.assertRaises(MediaStreamError):
+            run(player.video.recv())
+
     def test_video_file_png(self):
         path = self.create_video_file("test-%3d.png", duration=3)
         player = MediaPlayer(path)

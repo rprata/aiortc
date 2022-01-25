@@ -71,7 +71,7 @@ class PcmEncoder(ABC, Encoder):
         return [data], timestamp
 
     def pack(self, packet: Packet) -> Tuple[List[bytes], int]:
-        [packet.to_bytes()], int(packet.dts)
+        return packet.to_bytes(), int(packet.dts)
 
 
 class PcmaDecoder(PcmDecoder):

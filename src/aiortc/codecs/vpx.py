@@ -366,7 +366,7 @@ class Vp8Encoder(Encoder):
         return payloads, timestamp
 
     def pack(self, packet: Packet) -> Tuple[List[bytes], int]:
-        [packet.to_bytes()], int(packet.dts)
+        return packet.to_bytes(), int(packet.dts)
 
     @property
     def target_bitrate(self) -> int:

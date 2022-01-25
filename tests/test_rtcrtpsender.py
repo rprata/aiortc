@@ -6,7 +6,11 @@ from unittest import TestCase
 from aiortc import MediaStreamTrack
 from aiortc.codecs import PCMU_CODEC
 from aiortc.exceptions import InvalidStateError
-from aiortc.mediastreams import AudioStreamTrack, VideoStreamTrack
+from aiortc.mediastreams import (
+    AudioStreamTrack,
+    VideoNativeStreamTrack,
+    VideoStreamTrack,
+)
 from aiortc.rtcrtpparameters import (
     RTCRtpCapabilities,
     RTCRtpCodecCapability,
@@ -33,6 +37,10 @@ from .utils import dummy_dtls_transport_pair, run
 
 VP8_CODEC = RTCRtpCodecParameters(
     mimeType="video/VP8", clockRate=90000, payloadType=100
+)
+
+H264_CODEC = RTCRtpCodecParameters(
+    mimeType="video/H264", clockRate=90000, payloadType=98
 )
 
 
@@ -254,6 +262,16 @@ class RTCRtpSenderTest(TestCase):
         sender._send_keyframe()
 
         # wait for packet to be transmitted, then shutdown
+        run(asyncio.sleep(0.1))
+        run(sender.stop())
+
+    def test_handle_encoded_packet(self):
+        sender = RTCRtpSender(VideoNativeStreamTrack(), self.local_transport)
+        self.assertEqual(sender.kind, "video")
+
+        run(sender.send(RTCRtpParameters(codecs=[H264_CODEC])))
+
+        # wait for cleanup
         run(asyncio.sleep(0.1))
         run(sender.stop())
 

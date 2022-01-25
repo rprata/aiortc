@@ -1,6 +1,10 @@
 from unittest import TestCase
 
-from aiortc.mediastreams import AudioStreamTrack, VideoStreamTrack
+from aiortc.mediastreams import (
+    AudioStreamTrack,
+    VideoNativeStreamTrack,
+    VideoStreamTrack,
+)
 
 
 class MediaStreamTrackTest(TestCase):
@@ -11,5 +15,10 @@ class MediaStreamTrackTest(TestCase):
 
     def test_video(self):
         track = VideoStreamTrack()
+        self.assertEqual(track.kind, "video")
+        self.assertEqual(len(track.id), 36)
+
+    def test_native_video(self):
+        track = VideoNativeStreamTrack()
         self.assertEqual(track.kind, "video")
         self.assertEqual(len(track.id), 36)
