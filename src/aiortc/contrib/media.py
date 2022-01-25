@@ -91,6 +91,7 @@ def player_worker(
     video_track,
     quit_event,
     throttle_playback,
+    loop_playback,
     transcode,
 ):
     audio_fifo = av.AudioFifo()
@@ -115,6 +116,9 @@ def player_worker(
             except (av.AVError, StopIteration) as exc:
                 if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
                     time.sleep(0.01)
+                    continue
+                if isinstance(exc, StopIteration) and loop_playback:
+                    container.seek(0)
                     continue
                 if audio_track:
                     asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
@@ -173,6 +177,9 @@ def player_worker(
             except (av.AVError, StopIteration) as exc:
                 if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
                     time.sleep(0.01)
+                    continue
+                if isinstance(exc, StopIteration) and loop_playback:
+                    container.seek(0)
                     continue
                 if audio_track:
                     asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
@@ -288,9 +295,10 @@ class MediaPlayer:
     :param file: The path to a file, or a file-like object.
     :param format: The format to use, defaults to autodect.
     :param options: Additional options to pass to FFmpeg.
+    :param loop: Whether to repeat playback indefinitely (requires a seekable file).
     """
 
-    def __init__(self, file, format=None, options={}, transcode=True):
+    def __init__(self, file, format=None, options={}, loop=False, transcode=True):
         self.__container = av.open(file=file, format=format, mode="r", options=options)
         self.__thread: Optional[threading.Thread] = None
         self.__thread_quit: Optional[threading.Event] = None
@@ -312,6 +320,12 @@ class MediaPlayer:
         # check whether we need to throttle playback
         container_format = set(self.__container.format.name.split(","))
         self._throttle_playback = not container_format.intersection(REAL_TIME_FORMATS)
+
+        # check whether the looping is supported
+        assert (
+            not loop or self.__container.duration is not None
+        ), "The `loop` argument requires a seekable file"
+        self._loop_playback = loop
 
     @property
     def audio(self) -> MediaStreamTrack:
@@ -343,6 +357,7 @@ class MediaPlayer:
                     self.__video,
                     self.__thread_quit,
                     self._throttle_playback,
+                    self._loop_playback,
                     self.__transcode,
                 ),
             )
