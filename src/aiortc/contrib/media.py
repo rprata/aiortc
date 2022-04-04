@@ -4,16 +4,18 @@ import fractions
 import logging
 import threading
 import time
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Union
 
 import av
 from av import AudioFrame, VideoFrame
+from av.audio.stream import AudioStream
 from av.frame import Frame
+from av.packet import Packet
+from av.video.stream import VideoStream
 
 from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamTrack
 
 logger = logging.getLogger(__name__)
-
 
 REAL_TIME_FORMATS = [
     "alsa",
@@ -90,6 +92,7 @@ def player_worker(
     quit_event,
     throttle_playback,
     loop_playback,
+    decode,
 ):
     audio_sample_rate = 48000
     audio_samples = 0
@@ -107,50 +110,93 @@ def player_worker(
     start_time = time.time()
 
     while not quit_event.is_set():
-        try:
-            frame = next(container.decode(*streams))
-        except (av.AVError, StopIteration) as exc:
-            if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
-                time.sleep(0.01)
-                continue
-            if isinstance(exc, StopIteration) and loop_playback:
-                container.seek(0)
-                continue
-            if audio_track:
-                asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
-            if video_track:
-                asyncio.run_coroutine_threadsafe(video_track._queue.put(None), loop)
-            break
+        if decode:
+            try:
+                frame = next(container.decode(*streams))
+            except (av.AVError, StopIteration) as exc:
+                if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
+                    time.sleep(0.01)
+                    continue
+                if isinstance(exc, StopIteration) and loop_playback:
+                    container.seek(0)
+                    continue
+                if audio_track:
+                    asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
+                if video_track:
+                    asyncio.run_coroutine_threadsafe(video_track._queue.put(None), loop)
+                break
 
-        # read up to 1 second ahead
-        if throttle_playback:
-            elapsed_time = time.time() - start_time
-            if frame_time and frame_time > elapsed_time + 1:
-                time.sleep(0.1)
+            # read up to 1 second ahead
+            if throttle_playback:
+                elapsed_time = time.time() - start_time
+                if frame_time and frame_time > elapsed_time + 1:
+                    time.sleep(0.1)
 
-        if isinstance(frame, AudioFrame) and audio_track:
-            for frame in audio_resampler.resample(frame):
-                # fix timestamps
-                frame.pts = audio_samples
-                frame.time_base = audio_time_base
-                audio_samples += frame.samples
+            if isinstance(frame, AudioFrame) and audio_track:
+                for frame in audio_resampler.resample(frame):
+                    # fix timestamps
+                    frame.pts = audio_samples
+                    frame.time_base = audio_time_base
+                    audio_samples += frame.samples
+
+                    frame_time = frame.time
+                    asyncio.run_coroutine_threadsafe(
+                        audio_track._queue.put(frame), loop
+                    )
+            elif isinstance(frame, VideoFrame) and video_track:
+                if frame.pts is None:  # pragma: no cover
+                    logger.warning(
+                        "MediaPlayer(%s) Skipping video frame with no pts",
+                        container.name,
+                    )
+                    continue
+
+                # video from a webcam doesn't start at pts 0, cancel out offset
+                if video_first_pts is None:
+                    video_first_pts = frame.pts
+                frame.pts -= video_first_pts
 
                 frame_time = frame.time
-                asyncio.run_coroutine_threadsafe(audio_track._queue.put(frame), loop)
-        elif isinstance(frame, VideoFrame) and video_track:
-            if frame.pts is None:  # pragma: no cover
-                logger.warning(
-                    "MediaPlayer(%s) Skipping video frame with no pts", container.name
+                asyncio.run_coroutine_threadsafe(video_track._queue.put(frame), loop)
+        else:
+            try:
+                packet = next(container.demux(*streams))
+            except Exception as exc:
+                logger.error(
+                    "Demux packet exception: %s",
+                    exc,
                 )
-                continue
+                if audio_track:
+                    asyncio.run_coroutine_threadsafe(audio_track._queue.put(None), loop)
+                if video_track:
+                    asyncio.run_coroutine_threadsafe(video_track._queue.put(None), loop)
+                break
 
-            # video from a webcam doesn't start at pts 0, cancel out offset
-            if video_first_pts is None:
-                video_first_pts = frame.pts
-            frame.pts -= video_first_pts
+            # read up to 1 second ahead
+            if throttle_playback:
+                elapsed_time = time.time() - start_time
+                if frame_time and frame_time > elapsed_time + 1:  # pragma: no cover
+                    time.sleep(0.1)
 
-            frame_time = frame.time
-            asyncio.run_coroutine_threadsafe(video_track._queue.put(frame), loop)
+            if isinstance(packet.stream, AudioStream):
+                if packet.pts and packet.time_base:
+                    frame_time = int(packet.pts * packet.time_base)
+                asyncio.run_coroutine_threadsafe(audio_track._queue.put(packet), loop)
+            elif isinstance(packet.stream, VideoStream):
+                if packet.pts is None:  # pragma: no cover
+                    logger.warning(
+                        "MediaPlayer(%s) Skipping video packet with no pts",
+                        container.name,
+                    )
+                    continue
+
+                # video from a webcam doesn't start at pts 0, cancel out offset
+                if video_first_pts is None:
+                    video_first_pts = packet.pts
+                packet.pts -= video_first_pts
+
+                frame_time = int(packet.pts * packet.time_base)
+                asyncio.run_coroutine_threadsafe(video_track._queue.put(packet), loop)
 
 
 class PlayerStreamTrack(MediaStreamTrack):
@@ -161,30 +207,36 @@ class PlayerStreamTrack(MediaStreamTrack):
         self._queue = asyncio.Queue()
         self._start = None
 
-    async def recv(self):
+    async def recv(self) -> Union[Frame, Packet]:
         if self.readyState != "live":
             raise MediaStreamError
 
         self._player._start(self)
-        frame = await self._queue.get()
-        if frame is None:
+        data = await self._queue.get()
+        if data is None:
             self.stop()
             raise MediaStreamError
-        frame_time = frame.time
+        if isinstance(data, Frame):
+            data_time = data.time
+        elif isinstance(data, Packet):
+            data_time = data.pts * (
+                data.time_base.numerator / data.time_base.denominator
+            )
 
         # control playback rate
         if (
             self._player is not None
             and self._player._throttle_playback
-            and frame_time is not None
+            and data_time is not None
+            and isinstance(data, Frame)
         ):
             if self._start is None:
-                self._start = time.time() - frame_time
+                self._start = time.time() - data_time
             else:
-                wait = self._start + frame_time - time.time()
+                wait = self._start + data_time - time.time()
                 await asyncio.sleep(wait)
 
-        return frame
+        return data
 
     def stop(self):
         super().stop()
@@ -230,7 +282,7 @@ class MediaPlayer:
     :param loop: Whether to repeat playback indefinitely (requires a seekable file).
     """
 
-    def __init__(self, file, format=None, options={}, loop=False):
+    def __init__(self, file, format=None, options={}, loop=False, decode=True):
         self.__container = av.open(file=file, format=format, mode="r", options=options)
         self.__thread: Optional[threading.Thread] = None
         self.__thread_quit: Optional[threading.Event] = None
@@ -238,6 +290,7 @@ class MediaPlayer:
         # examine streams
         self.__started: Set[PlayerStreamTrack] = set()
         self.__streams = []
+        self.__decode = decode
         self.__audio: Optional[PlayerStreamTrack] = None
         self.__video: Optional[PlayerStreamTrack] = None
         for stream in self.__container.streams:
@@ -289,6 +342,7 @@ class MediaPlayer:
                     self.__thread_quit,
                     self._throttle_playback,
                     self._loop_playback,
+                    self.__decode,
                 ),
             )
             self.__thread.start()

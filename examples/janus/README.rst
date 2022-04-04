@@ -32,3 +32,9 @@ If you want to play a media file instead of sending green video frames, run:
 .. code-block:: console
 
    $ python janus.py --play-from video.mp4 http://localhost:8088/janus
+
+If you want to play a media without decode frames (just copying video container), run:
+
+.. code-block:: console
+
+   $ python janus.py --no-decode --play-from rtsp://user@password@ip:port/stream http://localhost:8088/janus

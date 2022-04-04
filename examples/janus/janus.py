@@ -97,7 +97,7 @@ class JanusSession:
                         print(data)
 
 
-async def publish(plugin, player):
+async def publish(plugin, player, decode):
     """
     Send video to the room.
     """
@@ -113,6 +113,7 @@ async def publish(plugin, player):
     if player and player.video:
         pc.addTrack(player.video)
     else:
+        # video dummy will always decode
         pc.addTrack(VideoStreamTrack())
 
     # send offer
@@ -178,7 +179,7 @@ async def subscribe(session, room, feed, recorder):
     await recorder.start()
 
 
-async def run(player, recorder, room, session):
+async def run(player, recorder, room, session, decode):
     await session.create()
 
     # join video room
@@ -198,7 +199,7 @@ async def run(player, recorder, room, session):
         print("id: %(id)s, display: %(display)s" % publisher)
 
     # send video
-    await publish(plugin=plugin, player=player)
+    await publish(plugin=plugin, player=player, decode=decode)
 
     # receive video
     if recorder is not None and publishers:
@@ -223,6 +224,12 @@ if __name__ == "__main__":
     parser.add_argument("--play-from", help="Read the media from a file and sent it."),
     parser.add_argument("--record-to", help="Write received media to a file."),
     parser.add_argument("--verbose", "-v", action="count")
+
+    decode_parser = parser.add_mutually_exclusive_group(required=False)
+    decode_parser.add_argument("--decode", dest="decode", action="store_true")
+    decode_parser.add_argument("--no-decode", dest="decode", action="store_false")
+    parser.set_defaults(decode=True)
+
     args = parser.parse_args()
 
     if args.verbose:
@@ -233,7 +240,7 @@ if __name__ == "__main__":
 
     # create media source
     if args.play_from:
-        player = MediaPlayer(args.play_from)
+        player = MediaPlayer(args.play_from, decode=args.decode)
     else:
         player = None
 
@@ -246,7 +253,13 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(
-            run(player=player, recorder=recorder, room=args.room, session=session)
+            run(
+                player=player,
+                recorder=recorder,
+                room=args.room,
+                session=session,
+                decode=args.decode,
+            )
         )
     except KeyboardInterrupt:
         pass

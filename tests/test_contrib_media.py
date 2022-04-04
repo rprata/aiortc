@@ -362,6 +362,14 @@ class BufferingInputContainer:
 
         return self.__real.decode(*args, **kwargs)
 
+    def demux(self, *args, **kwargs):
+        # fail with EAGAIN once
+        if not self.__failed:
+            self.__failed = True
+            raise av.AVError(errno.EAGAIN, "EAGAIN")
+
+        return self.__real.demux(*args, **kwargs)
+
     def __getattr__(self, name):
         return getattr(self.__real, name)
 
@@ -435,6 +443,26 @@ class MediaPlayerTest(MediaTestCase):
         player.audio.stop()
 
     @asynctest
+    async def test_audio_file_audio_exception_no_decode(self):
+        path = self.create_audio_file("test.wav", sample_rate=48000)
+        container = BufferingInputContainer(av.open(path, "r"))
+
+        with patch("av.open") as mock_open:
+            mock_open.return_value = container
+            player = MediaPlayer(path, decode=False)
+
+        # check tracks
+        self.assertIsNotNone(player.audio)
+        self.assertIsNone(player.video)
+
+        self.assertEqual(player.audio.readyState, "live")
+
+        with self.assertRaises(MediaStreamError):
+            await player.audio.recv()
+
+        self.assertEqual(player.audio.readyState, "ended")
+
+    @asynctest
     async def test_audio_and_video_file(self):
         path = self.create_audio_and_video_file(name="test.mp4", duration=5)
         player = MediaPlayer(path)
@@ -466,6 +494,41 @@ class MediaPlayerTest(MediaTestCase):
             await player.audio.recv()
         with self.assertRaises(MediaStreamError):
             await player.video.recv()
+
+    @asynctest
+    async def test_audio_and_video_file_no_decode(self):
+        path = self.create_audio_and_video_file(name="test.mp4", duration=5)
+        player = MediaPlayer(path, decode=False)
+
+        # check tracks
+        self.assertIsNotNone(player.audio)
+        self.assertIsNotNone(player.video)
+
+        # read some frames
+        self.assertEqual(player.audio.readyState, "live")
+        self.assertEqual(player.video.readyState, "live")
+        for i in range(10):
+            await asyncio.gather(player.audio.recv(), player.video.recv())
+
+        # stop audio track
+        player.audio.stop()
+
+        # continue reading
+        for i in range(10):
+            with self.assertRaises(MediaStreamError):
+                await player.audio.recv()
+            await player.video.recv()
+
+        # stop video track
+        player.video.stop()
+
+        # continue reading
+        with self.assertRaises(MediaStreamError):
+            await player.audio.recv()
+        with self.assertRaises(MediaStreamError):
+            await player.video.recv()
+
+        self.assertEqual(player.video.readyState, "ended")
 
     @asynctest
     async def test_video_file_png(self):
@@ -526,6 +589,27 @@ class MediaPlayerTest(MediaTestCase):
             self.assertEqual(frame.height, 480)
         with self.assertRaises(MediaStreamError):
             await player.video.recv()
+        self.assertEqual(player.video.readyState, "ended")
+
+    @asynctest
+    async def test_video_file_mp4_video_exception_no_decode(self):
+        path = self.create_video_file("test.mp4", duration=3)
+        container = BufferingInputContainer(av.open(path, "r"))
+
+        with patch("av.open") as mock_open:
+            mock_open.return_value = container
+            player = MediaPlayer(path, decode=False)
+
+        # check tracks
+        self.assertIsNone(player.audio)
+        self.assertIsNotNone(player.video)
+
+        # read all frames
+        self.assertEqual(player.video.readyState, "live")
+
+        with self.assertRaises(MediaStreamError):
+            await player.video.recv()
+
         self.assertEqual(player.video.readyState, "ended")
 
 
