@@ -16,6 +16,7 @@ from av.video.stream import VideoStream
 from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamTrack
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 REAL_TIME_FORMATS = [
     "alsa",
@@ -112,6 +113,7 @@ def player_worker_decode(
         try:
             frame = next(container.decode(*streams))
         except Exception as exc:
+            logger.error(f"Exception from player_worker_decode {exc}")
             if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
                 time.sleep(0.01)
                 continue
@@ -175,6 +177,7 @@ def player_worker_demux(
             if not packet.size:
                 raise StopIteration
         except Exception as exc:
+            logger.error(f"Exception from player_worker_demux {exc}")
             if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
                 time.sleep(0.01)
                 continue
@@ -302,8 +305,16 @@ class MediaPlayer:
     def __init__(
         self, file, format=None, options={}, timeout=None, loop=False, decode=True
     ):
+        self.__options = options
+        self.__timeout = timeout
+        self.__format = format
+        self.__mode = "r"
         self.__container = av.open(
-            file=file, format=format, mode="r", options=options, timeout=timeout
+            file=file,
+            format=self.__format,
+            mode=self.__mode,
+            options=self.__options,
+            timeout=self.__timeout,
         )
         self.__thread: Optional[threading.Thread] = None
         self.__thread_quit: Optional[threading.Event] = None
