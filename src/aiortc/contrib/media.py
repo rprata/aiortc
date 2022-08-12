@@ -15,9 +15,6 @@ from av.video.stream import VideoStream
 
 from ..mediastreams import AUDIO_PTIME, MediaStreamError, MediaStreamTrack
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
 REAL_TIME_FORMATS = [
     "alsa",
     "android_camera",
@@ -47,6 +44,10 @@ async def blackhole_consume(track):
             await track.recv()
         except MediaStreamError:
             return
+
+
+class MediaDemuxException(Exception):
+    pass
 
 
 class MediaBlackhole:
@@ -93,6 +94,13 @@ def player_worker_decode(
     quit_event,
     throttle_playback,
     loop_playback,
+    force_retry_connection,
+    logger,
+    file,
+    format,
+    mode,
+    options,
+    timeout,
 ):
     audio_sample_rate = 48000
     audio_samples = 0
@@ -166,18 +174,68 @@ def player_worker_demux(
     quit_event,
     throttle_playback,
     loop_playback,
+    force_retry_connection,
+    logger,
+    file,
+    format,
+    mode,
+    options,
+    timeout,
 ):
     video_first_pts = None
     frame_time = None
+    packet_pts = 0
+    last_pts = 0
     start_time = time.time()
+    time_base = 0
 
     while not quit_event.is_set():
+        num_attempts = 0
         try:
             packet = next(container.demux(*streams))
+            time_base = packet.time_base
             if not packet.size:
-                raise StopIteration
+                if force_retry_connection:
+                    raise MediaDemuxException("Camera connection failed.")
+                else:
+                    raise StopIteration("Packet is invalid!")
         except Exception as exc:
             logger.error(f"Exception from player_worker_demux {exc}")
+            if isinstance(exc, MediaDemuxException):
+                error_time_start = time.time()
+                logger.info("Restarting streaming...")
+                if container:
+                    container.close()
+                    container = None
+                while container is None and num_attempts < 5:
+                    num_attempts += 1
+                    try:
+                        container = av.open(
+                            file=file,
+                            format=format,
+                            mode=mode,
+                            options=options,
+                            timeout=timeout,
+                        )
+                    except Exception as ex:
+                        logger.error(f"Error retry to connection: {ex}")
+                        time.sleep(0.25)
+                elapsed_pts = (time.time() - error_time_start + 3) / time_base
+                last_pts = packet_pts + elapsed_pts
+                logger.info("Reconnected...")
+                streams = []
+                for stream in container.streams:
+                    if stream.type == "audio":
+                        if stream.codec_context.name in [
+                            "opus",
+                            "pcm_alaw",
+                            "pcm_mulaw",
+                        ]:
+                            streams.append(stream)
+                    elif stream.type == "video":
+                        if stream.codec_context.name in ["h264", "vp8"]:
+                            streams.append(stream)
+                continue
             if isinstance(exc, av.FFmpegError) and exc.errno == errno.EAGAIN:
                 time.sleep(0.01)
                 continue
@@ -210,7 +268,9 @@ def player_worker_demux(
             # video from a webcam doesn't start at pts 0, cancel out offset
             if video_first_pts is None:
                 video_first_pts = packet.pts
-            packet.pts -= video_first_pts
+
+            packet.pts -= video_first_pts - last_pts
+            packet_pts = packet.pts
 
         if (
             track is not None
@@ -303,19 +363,30 @@ class MediaPlayer:
     """
 
     def __init__(
-        self, file, format=None, options={}, timeout=None, loop=False, decode=True
+        self,
+        file,
+        format=None,
+        options={},
+        timeout=None,
+        loop=False,
+        decode=True,
+        force_retry_connection=False,
+        logger=None,
     ):
+        self.__file = file
         self.__options = options
         self.__timeout = timeout
         self.__format = format
         self.__mode = "r"
         self.__container = av.open(
-            file=file,
+            file=self.__file,
             format=self.__format,
             mode=self.__mode,
             options=self.__options,
             timeout=self.__timeout,
         )
+        self.__logger = logger if logger is not None else logging.getLogger(__name__)
+        self._force_retry_connection = force_retry_connection
         self.__thread: Optional[threading.Thread] = None
         self.__thread_quit: Optional[threading.Event] = None
 
@@ -382,6 +453,13 @@ class MediaPlayer:
                     self.__thread_quit,
                     self._throttle_playback,
                     self._loop_playback,
+                    self._force_retry_connection,
+                    self.__logger,
+                    self.__file,
+                    self.__format,
+                    self.__mode,
+                    self.__options,
+                    self.__timeout,
                 ),
             )
             self.__thread.start()
@@ -400,7 +478,7 @@ class MediaPlayer:
             self.__container = None
 
     def __log_debug(self, msg: str, *args) -> None:
-        logger.debug(f"MediaPlayer(%s) {msg}", self.__container.name, *args)
+        self.__logger.debug(f"MediaPlayer(%s) {msg}", self.__container.name, *args)
 
 
 class MediaRecorderContext:
@@ -549,9 +627,10 @@ class MediaRelay:
     over the network.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, logger=None) -> None:
         self.__proxies: Dict[MediaStreamTrack, Set[RelayStreamTrack]] = {}
         self.__tasks: Dict[MediaStreamTrack, asyncio.Future[None]] = {}
+        self.__logger = logger if logger is not None else logging.getLogger(__name__)
 
     def subscribe(
         self, track: MediaStreamTrack, buffered: bool = True
@@ -590,7 +669,7 @@ class MediaRelay:
             self.__proxies[track].discard(proxy)
 
     def __log_debug(self, msg: str, *args) -> None:
-        logger.debug(f"MediaRelay(%s) {msg}", id(self), *args)
+        self.__logger.debug(f"MediaRelay(%s) {msg}", id(self), *args)
 
     async def __run_track(self, track: MediaStreamTrack) -> None:
         self.__log_debug("Start reading source %s" % id(track))
